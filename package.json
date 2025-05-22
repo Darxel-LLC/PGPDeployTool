@@ -1,0 +1,13 @@
+{
+    "name": "process-zip-parts",
+    "version": "1.0.0",
+    "description": "Node.js function to send ZIP parts",
+    "main": "deploy.js",
+    "scripts": {
+        "start": "node ./../deploytest.js"
+    },
+    "dependencies": {
+        "axios": "^1.8.4",
+        "uuid": "^11.1.0"
+    }
+}
