@@ -50,7 +50,9 @@ async function splitAndUploadZip(zipFilePath, partSizeMB, uploadUrl, game, descr
                 'Content-Type': 'application/octet-stream',
                 'X-Part-Number': partNumber,
                 'X-Total-Parts': Math.ceil(totalSize / partSizeBytes),
-                'X-File-Name': sessionID,            
+                'X-File-Name': sessionID,   
+                'X-Game-Name': game,
+                'X-Description': description           
               },
             });
             console.log(`Часть ${partNumber} успешно отправлена. Статус: ${response.status}`);

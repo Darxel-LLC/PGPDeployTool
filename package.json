@@ -1,10 +1,11 @@
 {
-    "name": "process-zip-parts",
-    "version": "1.0.0",
-    "description": "Node.js function to send ZIP parts",
+  "name": "process-zip-parts",
+  "version": "1.0.0",
+  "description": "Node.js module to split and upload ZIP file parts",
     "main": "deploy.js",
     "scripts": {
-        "start": "node ./../deploytest.js"
+        "start": "node ./deploy.js",
+        "test": "echo \"Error: no test specified\" && exit 1"
     },
     "dependencies": {
         "axios": "^1.8.4",
