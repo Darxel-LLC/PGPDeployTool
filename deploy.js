@@ -68,11 +68,10 @@ function patchBuild(config, version) {
   if (variablesFileName) {
     const variablesPath = path.join(build, variablesFileName);
     let varsContent = fs.readFileSync(variablesPath, 'utf8');
-    varsContent = varsContent
-      .replace(/--debug\s*=\s*['"]?\w+['"]?/, '--debug=false')
-      .replace(/--version\s*=\s*['"]?\d+(\.\d+)?['"]?/, `--version=${version}`);
+    varsContent = varsContent.replace(/--debug/g, config.debug); // Используем config.debug
+    varsContent = varsContent.replace(/--version/g, version);
     fs.writeFileSync(variablesPath, varsContent, 'utf8');
-    console.log(`✔ Обновлён ${variablesFileName} версия → ${version}`);
+    console.log(`✔ Обновлён ${variablesFileName} версия → ${version}, debug → ${config.debug}`);
   } else {
     console.warn(`⚠ Не найден variables.js*.js, пропускаем патчинг переменных.`);
   }
@@ -94,6 +93,15 @@ function patchBuild(config, version) {
     }
   } else {
     console.warn(`⚠ Не найден GameAnalytics.js*.js, пропускаем восстановление.`);
+  }
+
+  const indexHtmlPath = path.join(build, 'index.html');
+  if (fs.existsSync(indexHtmlPath)) {
+    let indexHtmlContent = fs.readFileSync(indexHtmlPath, 'utf8');
+    indexHtmlContent = indexHtmlContent.replace(/index\.[a-f0-9]+\.js/g, 'index.js');
+    indexHtmlContent = indexHtmlContent.replace(/GameAnalytics\.[a-f0-9]+\.js/g, 'GameAnalytics.js');
+    fs.writeFileSync(indexHtmlPath, indexHtmlContent, 'utf8');
+    console.log('✔ Обновлены ссылки в index.html');
   }
 }
 
