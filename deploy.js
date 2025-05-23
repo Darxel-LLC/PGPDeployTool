@@ -1,11 +1,14 @@
 const fs = require('fs');
+const fsp = require('fs').promises;
 const path = require('path');
 const { execSync } = require('child_process');
-const AdmZip = require('adm-zip');
 const glob = require('glob');
 const fse = require('fs-extra');
+const AdmZip = require('adm-zip');
+const axios = require('axios');
+const { v4: uuidv4 } = require('uuid');
 
-async function getLatestGitTag(prefix, projectPath) {
+function getLatestGitTag(prefix, projectPath) {
   const tags = execSync('git tag', { cwd: projectPath }).toString().split('\n');
   const latest = tags.filter(tag => tag.startsWith(prefix)).pop();
   return latest ? latest.slice(prefix.length) : '0';
@@ -18,7 +21,7 @@ function buildProject(config) {
     execSync(cmd, { stdio: 'inherit' });
     console.log('✔ Cocos-сборка завершилась с кодом 0');
   } catch (err) {
-    console.warn('⚠️ Cocos-сборка вернула ошибку, но продолжаем деплой.');
+    console.warn('⚠️ Cocos-сборка вернула ошибку или предупреждения, но мы продолжаем деплой.');
   }
 }
 
@@ -28,8 +31,10 @@ function findHashedJsFile(baseName, dir) {
   return files.length ? path.basename(files[0]) : null;
 }
 
-async function patchBuild(config, version) {
+function patchBuild(config, version) {
+  console.log('🔧 Патчинг build-папки...');
   const build = config.buildPath;
+
   const indexFileName = findHashedJsFile(config.indexFile, build);
   const platformIndexFileName = findHashedJsFile(config.platformIndexFile, build);
   const variablesFileName = findHashedJsFile('variables.js', build);
@@ -37,13 +42,27 @@ async function patchBuild(config, version) {
 
   if (indexFileName) {
     const indexPath = path.join(build, indexFileName);
-    try { fs.unlinkSync(indexPath); } catch {}
+    try {
+      fs.unlinkSync(indexPath);
+      console.log(`✔ Удалён старый файл ${indexFileName}`);
+    } catch (err) {
+      console.warn(`⚠ Не удалось удалить ${indexFileName}: ${err.message}`);
+    }
+  } else {
+    console.warn(`⚠ Не найден файл ${config.indexFile}*.js, пропускаем удаление.`);
   }
 
   if (platformIndexFileName) {
     const oldPath = path.join(build, platformIndexFileName);
     const newPath = path.join(build, config.indexFile);
-    try { fs.renameSync(oldPath, newPath); } catch {}
+    try {
+      fs.renameSync(oldPath, newPath);
+      console.log(`✔ Переименован ${platformIndexFileName} → ${config.indexFile}`);
+    } catch (err) {
+      console.warn(`⚠ Ошибка при переименовании ${platformIndexFileName}: ${err.message}`);
+    }
+  } else {
+    console.warn(`⚠ Не найден файл ${config.platformIndexFile}*.js, пропускаем переименование.`);
   }
 
   if (variablesFileName) {
@@ -53,27 +72,45 @@ async function patchBuild(config, version) {
       .replace(/--debug\s*=\s*['"]?\w+['"]?/, '--debug=false')
       .replace(/--version\s*=\s*['"]?\d+(\.\d+)?['"]?/, `--version=${version}`);
     fs.writeFileSync(variablesPath, varsContent, 'utf8');
+    console.log(`✔ Обновлён ${variablesFileName} версия → ${version}`);
+  } else {
+    console.warn(`⚠ Не найден variables.js*.js, пропускаем патчинг переменных.`);
   }
 
   if (gaFileName) {
-    try { fs.unlinkSync(path.join(build, gaFileName)); } catch {}
+    const gaPath = path.join(build, gaFileName);
+    try {
+      fs.unlinkSync(gaPath);
+      console.log(`✔ Удалён старый ${gaFileName}`);
+    } catch (err) {
+      console.warn(`⚠ Не удалось удалить ${gaFileName}: ${err.message}`);
+    }
     const backupPath = path.join(build, config.backupDir, config.gameAnalyticsFile);
-    fse.copySync(backupPath, path.join(build, config.gameAnalyticsFile));
+    try {
+      fse.copySync(backupPath, path.join(build, config.gameAnalyticsFile));
+      console.log(`✔ Восстановлен ${config.gameAnalyticsFile} из backup`);
+    } catch (err) {
+      console.warn(`⚠ Ошибка при копировании GameAnalytics.js: ${err.message}`);
+    }
+  } else {
+    console.warn(`⚠ Не найден GameAnalytics.js*.js, пропускаем восстановление.`);
   }
 }
 
-async function compressImages(config) {
+function compressImages(config) {
+  console.log('🖼 Сжатие изображений...');
   const imgDir = path.join(config.buildPath, 'assets');
   const caesium = path.resolve(__dirname, 'misc/caesiumclt.exe');
-  const excludeList = fs.existsSync('image_compress_exclude.txt')
-    ? fs.readFileSync('image_compress_exclude.txt', 'utf8')
-    : '';
+  const excludeList = fs.existsSync('image_compress_exclude.txt') ? fs.readFileSync('image_compress_exclude.txt', 'utf8') : '';
 
   const compress = (ext, level) => {
     glob.sync(`${imgDir}/**/*.${ext}`).forEach(file => {
       const md5 = execSync(`CertUtil -hashfile "${file}" MD5`).toString().split('\n')[1].trim().replace(/\s/g, '');
       if (!excludeList.includes(md5)) {
         execSync(`"${caesium}" --overwrite --quality ${level} --output "${path.dirname(file)}" "${file}"`);
+        console.log(`✔ ${file} сжат`);
+      } else {
+        console.log(`⏭ Пропущен ${file}`);
       }
     });
   };
@@ -82,13 +119,39 @@ async function compressImages(config) {
   compress('jpg', 60);
 }
 
-async function zipBuild(config) {
+function zipBuild(config) {
+  console.log('📦 Создание архива через adm-zip...');
   const outputPath = config.zipOutput;
-  const sourceDir  = config.buildPath;
-  if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-  const zip = new AdmZip();
-  zip.addLocalFolder(sourceDir);
-  zip.writeZip(outputPath);
+  const sourceDir = config.buildPath;
+
+  try {
+    if (fs.existsSync(outputPath)) {
+      fs.unlinkSync(outputPath);
+    }
+    const zip = new AdmZip();
+    zip.addLocalFolder(sourceDir, '');
+    zip.writeZip(outputPath);
+    const { size } = fs.statSync(outputPath);
+    console.log(`✔ Архив создан: ${outputPath} (${size} байт)`);
+  } catch (err) {
+    console.error('❌ Ошибка при создании архива adm-zip:', err);
+    throw err;
+  }
+}
+
+function verifyZip(filePath) {
+  console.log('🔍 Проверка целостности архива...');
+  try {
+    const zip = new AdmZip(filePath);
+    const entries = zip.getEntries();
+    console.log(`✔ В архиве ${entries.length} объектов:`);
+    entries.forEach(e => {
+      console.log(`  • ${e.entryName} (${e.header.size} байт)`);
+    });
+  } catch (err) {
+    console.error('❌ Ошибка при чтении архива:', err);
+    throw err;
+  }
 }
 
 async function splitAndUploadZip(zipFilePath, partSizeMB, uploadUrl, game, description) {
@@ -161,23 +224,29 @@ async function splitAndUploadZip(zipFilePath, partSizeMB, uploadUrl, game, descr
     }
   }
 }
+
 async function deployBuild(config) {
-  const lastVer = await getLatestGitTag(config.versionPrefix, config.projectPath);
-  const version = config.versionPrefix + (parseInt(lastVer) + 1);
-  console.log(`🚀 Версия билда: ${version}`);
+  try {
+    const lastVer = getLatestGitTag(config.versionPrefix, config.projectPath);
+    const version = config.versionPrefix + (parseInt(lastVer) + 1);
+    console.log(`🚀 Версия билда: ${version}`);
 
-  await buildProject(config);
-  await patchBuild(config, version);
-  await compressImages(config);
-  await zipBuild(config);
-
-  await splitAndUploadZip(
-    config.zipOutput,
-    config.upload.partSizeMB,
-    config.upload.url,
-    config.upload.game,
-    config.upload.description
-  );
+    buildProject(config);
+    patchBuild(config, version);
+    compressImages(config);
+    zipBuild(config);
+    // verifyZip(config.zipOutput); // Uncomment if verification is needed
+    await splitAndUploadZip(
+      config.zipOutput,
+      config.upload.partSizeMB,
+      config.upload.url,
+      config.upload.game,
+      config.upload.description
+    );
+  } catch (err) {
+    console.error('❌ Ошибка при деплое:', err);
+    throw err;
+  }
 }
 
-module.exports = { deployBuild };
+module.exports = { splitAndUploadZip, deployBuild };
